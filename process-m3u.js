@@ -3,7 +3,9 @@ const path = require('path');
 
 /**
  * Processa arquivo M3U para eliminar canais repetidos
- * Mantém apenas canais HD, Full HD e 4K
+ * Mantém apenas canais HD, Full HD, 4K e SD
+ * Remove canais com group-titles específicos
+ * Whitelist para canais importantes (GLOBO, PREMIERE, etc.)
  * Controla tamanho do arquivo final (máximo 20MB)
  */
 function processM3UFile(inputFile, maxSizeMB = 20) {
@@ -38,13 +40,16 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
             const trimmedLine = line.trim();
             
             if (trimmedLine.startsWith('#EXTINF:')) {
-                // Extrair nome do canal
+                // Extrair nome do canal e group-title
                 const match = trimmedLine.match(/#EXTINF:-?\d+\s*(.+)/);
+                const groupTitleMatch = trimmedLine.match(/group-title="([^"]+)"/);
+                
                 if (match) {
                     currentChannel = {
                         name: match[1].trim(),
                         line: trimmedLine,
-                        url: null
+                        url: null,
+                        groupTitle: groupTitleMatch ? groupTitleMatch[1].trim() : ''
                     };
                 }
             } else if (trimmedLine && !trimmedLine.startsWith('#') && currentChannel) {
@@ -57,8 +62,119 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         
         console.log(`📺 Canais encontrados: ${channels.length}`);
         
+        // Lista de group-titles para remover
+        const excludedGroupTitles = [
+            'SERIES',
+            'LANÇAMENTOS',
+            'FILMES 24H',
+            'SERIES 24H',
+            'INFANTIL 24H'
+        ];
+        
+        // Lista de group-titles na whitelist (sempre mantidos)
+        const whitelistGroupTitles = [
+            'GLOBO',
+            'PREMIERE',
+            'SPORTV',
+            'BAND',
+            'SBT',
+            'RECORD',
+            'REDE TV',
+            'CNN',
+            'FOX',
+            'DISNEY',
+            'NICKELODEON',
+            'CARTOON',
+            'DISCOVERY',
+            'HISTORY',
+            'NAT GEO',
+            'HBO',
+            'NETFLIX',
+            'AMAZON',
+            'DISNEY+',
+            'STAR+',
+            'PARAMOUNT+',
+            'APPLE TV+',
+            'HBO MAX',
+            'PRIME VIDEO'
+        ];
+        
+        // Função para verificar se o group-title deve ser excluído
+        function shouldExcludeGroupTitle(groupTitle) {
+            const normalizedGroupTitle = groupTitle?.toUpperCase().trim();
+            
+            if (!normalizedGroupTitle) return false;
+            
+            // Verificar se está na whitelist (sempre mantido)
+            if (whitelistGroupTitles.some(title => normalizedGroupTitle.includes(title.toUpperCase()))) {
+                return false;
+            }
+            
+            // Verificar correspondências exatas
+            if (excludedGroupTitles.some(title => normalizedGroupTitle === title.toUpperCase())) {
+                return true;
+            }
+            
+            // Verificar padrão "LANÇAMENTOS /ano/"
+            if (normalizedGroupTitle.match(/^LANÇAMENTOS\s+\/\d{4}\/$/)) {
+                return true;
+            }
+            
+            // Verificar padrões de temporada (S01, S02, S03, etc.)
+            if (normalizedGroupTitle.match(/S\d{1,2}/)) {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        // Função para verificar se o nome do canal deve ser excluído
+        function shouldExcludeChannelName(channelName) {
+            const normalizedName = channelName?.toUpperCase().trim();
+            
+            if (!normalizedName) return false;
+            
+            // Verificar se contém ano entre parênteses (ex: (2013), (2020), etc.)
+            if (normalizedName.match(/\(\d{4}\)/)) {
+                return true;
+            }
+            
+            // Verificar padrões de temporada no nome (S01, S02, S03, etc.)
+            if (normalizedName.match(/S\d{1,2}/)) {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        // Função para verificar se a URL deve ser excluída
+        function shouldExcludeURL(url) {
+            const normalizedURL = url?.toLowerCase().trim();
+            
+            if (!normalizedURL) return false;
+            
+            // Verificar se contém "/movie/" na URL
+            if (normalizedURL.includes('/movie/')) {
+                return true;
+            }
+            
+            return false;
+        }
+        
+        // Filtrar por group-title
+        const filteredByGroupTitle = channels.filter(channel => !shouldExcludeGroupTitle(channel.groupTitle));
+        console.log(`🗑️ Canais removidos por group-title: ${channels.length - filteredByGroupTitle.length}`);
+        
+        // Filtrar por nome do canal (anos entre parênteses)
+        const filteredByChannelName = filteredByGroupTitle.filter(channel => !shouldExcludeChannelName(channel.name));
+        console.log(`🗑️ Canais removidos por nome (anos): ${filteredByGroupTitle.length - filteredByChannelName.length}`);
+        
+        // Filtrar por URL (/movie/)
+        const filteredByURL = filteredByChannelName.filter(channel => !shouldExcludeURL(channel.url));
+        console.log(`🗑️ Canais removidos por URL (/movie/): ${filteredByChannelName.length - filteredByURL.length}`);
+        
         // Extrair nome base e resolução
-        channels.forEach(channel => {
+        filteredByURL.forEach(channel => {
             const name = channel.name;
             
             // Extrair resolução
@@ -66,7 +182,7 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
             let resolutionText = 'Unknown';
             let isHighQuality = false;
             
-            // Padrões de resolução - APENAS HD, Full HD e 4K
+            // Padrões de resolução - HD, Full HD, 4K e SD
             if (name.match(/4K|UHD/i)) {
                 resolution = 4;
                 resolutionText = '4K/UHD';
@@ -79,10 +195,14 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
                 resolution = 2;
                 resolutionText = '720p/HD';
                 isHighQuality = true;
+            } else if (name.match(/480p|SD/i)) {
+                resolution = 1;
+                resolutionText = '480p/SD';
+                isHighQuality = true; // SD também é considerado válido
             } else {
-                // Canais SD ou sem resolução identificada
+                // Canais sem resolução identificada
                 resolution = 0;
-                resolutionText = 'SD/Unknown';
+                resolutionText = 'Unknown';
                 isHighQuality = false;
             }
             
@@ -106,21 +226,21 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
             channel.isHighQuality = isHighQuality;
         });
         
-        // Filtrar apenas canais de alta qualidade (HD, Full HD, 4K)
-        const highQualityChannels = channels.filter(channel => channel.isHighQuality);
-        console.log(`🎯 Canais de alta qualidade (HD/FHD/4K): ${highQualityChannels.length}`);
-        console.log(`🗑️ Canais removidos (SD/Unknown): ${channels.length - highQualityChannels.length}`);
+        // Filtrar apenas canais de qualidade válida (HD, Full HD, 4K, SD)
+        const validQualityChannels = filteredByURL.filter(channel => channel.isHighQuality);
+        console.log(`🎯 Canais de qualidade válida (HD/FHD/4K/SD): ${validQualityChannels.length}`);
+        console.log(`🗑️ Canais removidos (Unknown): ${filteredByURL.length - validQualityChannels.length}`);
         
         // Agrupar por nome base
         const groups = {};
-        highQualityChannels.forEach(channel => {
+        validQualityChannels.forEach(channel => {
             if (!groups[channel.baseName]) {
                 groups[channel.baseName] = [];
             }
             groups[channel.baseName].push(channel);
         });
         
-        console.log(`📊 Grupos de canais de alta qualidade: ${Object.keys(groups).length}`);
+        console.log(`📊 Grupos de canais válidos: ${Object.keys(groups).length}`);
         
         // Processar cada grupo - manter apenas o melhor canal de cada grupo
         const processedChannels = [];
@@ -137,7 +257,7 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
             processedChannels.push(bestChannel);
         });
         
-        // Ordenar canais por resolução (4K primeiro, depois Full HD, depois HD)
+        // Ordenar canais por resolução (4K primeiro, depois Full HD, depois HD, depois SD)
         processedChannels.sort((a, b) => b.resolution - a.resolution);
         
         // Controle de tamanho do arquivo
@@ -162,7 +282,7 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         }
         
         // Gerar arquivo de saída
-        const outputFile = inputFile.replace('.m3u', '_hd_only.m3u');
+        const outputFile = inputFile.replace('.m3u', '_filtered_quality.m3u');
         let output = '#EXTM3U\n';
         
         finalChannels.forEach(channel => {
@@ -177,9 +297,12 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         
         console.log('\n📊 RESUMO FINAL:');
         console.log(`📺 Canais originais: ${channels.length}`);
-        console.log(`🎯 Canais de alta qualidade: ${highQualityChannels.length}`);
+        console.log(`🗑️ Removidos por group-title: ${channels.length - filteredByGroupTitle.length}`);
+        console.log(`🗑️ Removidos por nome (anos): ${filteredByGroupTitle.length - filteredByChannelName.length}`);
+        console.log(`🗑️ Removidos por URL (/movie/): ${filteredByChannelName.length - filteredByURL.length}`);
+        console.log(`🎯 Canais de qualidade válida: ${validQualityChannels.length}`);
         console.log(`✅ Canais no arquivo final: ${finalChannels.length}`);
-        console.log(`🗑️ Canais removidos: ${channels.length - finalChannels.length}`);
+        console.log(`🗑️ Total de canais removidos: ${channels.length - finalChannels.length}`);
         console.log(`📈 Redução: ${((channels.length - finalChannels.length) / channels.length * 100).toFixed(1)}%`);
         console.log(`📏 Tamanho do arquivo final: ${finalSizeMB}MB`);
         console.log(`📁 Arquivo de saída: ${outputFile}`);
@@ -197,6 +320,43 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         Object.entries(resolutionStats).forEach(([resolution, count]) => {
             console.log(`   ${resolution}: ${count} canais`);
         });
+        
+        // Mostrar alguns exemplos de group-titles removidos
+        const removedGroupTitles = new Set();
+        channels.forEach(channel => {
+            if (shouldExcludeGroupTitle(channel.groupTitle)) {
+                removedGroupTitles.add(channel.groupTitle);
+            }
+        });
+        
+        if (removedGroupTitles.size > 0) {
+            console.log('\n🗑️ Group-titles removidos:');
+            Array.from(removedGroupTitles).slice(0, 10).forEach(title => {
+                console.log(`   - "${title}"`);
+            });
+            if (removedGroupTitles.size > 10) {
+                console.log(`   ... e mais ${removedGroupTitles.size - 10} outros`);
+            }
+        }
+        
+        // Mostrar alguns exemplos de group-titles da whitelist
+        const whitelistFound = new Set();
+        finalChannels.forEach(channel => {
+            const normalizedTitle = channel.groupTitle?.toUpperCase().trim();
+            if (normalizedTitle && whitelistGroupTitles.some(title => normalizedTitle.includes(title.toUpperCase()))) {
+                whitelistFound.add(channel.groupTitle);
+            }
+        });
+        
+        if (whitelistFound.size > 0) {
+            console.log('\n✅ Group-titles da whitelist encontrados:');
+            Array.from(whitelistFound).slice(0, 10).forEach(title => {
+                console.log(`   - "${title}"`);
+            });
+            if (whitelistFound.size > 10) {
+                console.log(`   ... e mais ${whitelistFound.size - 10} outros`);
+            }
+        }
         
     } catch (error) {
         console.error(`❌ Erro ao processar arquivo: ${error.message}`);
