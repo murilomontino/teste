@@ -1,0 +1,22 @@
+{
+    "name": "download-project",
+    "version": "1.0.0",
+    "description": "Script Node.js para download de conteúdo de links",
+    "main": "download.js",
+    "scripts": {
+        "start": "node download.js",
+        "download": "node download.js"
+    },
+    "keywords": [
+        "download",
+        "node",
+        "script"
+    ],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "axios": "^1.6.0",
+        "fs": "^0.0.1-security",
+        "path": "^0.12.7"
+    }
+}
