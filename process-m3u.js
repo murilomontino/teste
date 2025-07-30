@@ -6,6 +6,7 @@ const path = require('path');
  * Mantém apenas canais HD, Full HD, 4K e SD
  * Remove canais com group-titles específicos
  * Whitelist para canais importantes (GLOBO, PREMIERE, etc.)
+ * Remove canais com anos no nome e URLs de filmes
  * Controla tamanho do arquivo final (máximo 20MB)
  */
 function processM3UFile(inputFile, maxSizeMB = 20) {
@@ -68,7 +69,7 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
             'LANÇAMENTOS',
             'FILMES 24H',
             'SERIES 24H',
-            'INFANTIL 24H'
+            'INFANTIL 24H',
         ];
         
         // Lista de group-titles na whitelist (sempre mantidos)
@@ -91,12 +92,6 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
             'HBO',
             'NETFLIX',
             'AMAZON',
-            'DISNEY+',
-            'STAR+',
-            'PARAMOUNT+',
-            'APPLE TV+',
-            'HBO MAX',
-            'PRIME VIDEO'
         ];
         
         // Função para verificar se o group-title deve ser excluído
@@ -129,10 +124,16 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         }
         
         // Função para verificar se o nome do canal deve ser excluído
-        function shouldExcludeChannelName(channelName) {
+        function shouldExcludeChannelName(channelName, groupTitle) {
             const normalizedName = channelName?.toUpperCase().trim();
+            const normalizedGroupTitle = groupTitle?.toUpperCase().trim();
             
             if (!normalizedName) return false;
+            
+            // Verificar se está na whitelist (sempre mantido)
+            if (normalizedGroupTitle && whitelistGroupTitles.some(title => normalizedGroupTitle.includes(title.toUpperCase()))) {
+                return false;
+            }
             
             // Verificar se contém ano entre parênteses (ex: (2013), (2020), etc.)
             if (normalizedName.match(/\(\d{4}\)/)) {
@@ -148,10 +149,16 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         }
         
         // Função para verificar se a URL deve ser excluída
-        function shouldExcludeURL(url) {
+        function shouldExcludeURL(url, groupTitle) {
             const normalizedURL = url?.toLowerCase().trim();
+            const normalizedGroupTitle = groupTitle?.toUpperCase().trim();
             
             if (!normalizedURL) return false;
+            
+            // Verificar se está na whitelist (sempre mantido)
+            if (normalizedGroupTitle && whitelistGroupTitles.some(title => normalizedGroupTitle.includes(title.toUpperCase()))) {
+                return false;
+            }
             
             // Verificar se contém "/movie/" na URL
             if (normalizedURL.includes('/movie/')) {
@@ -166,11 +173,11 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         console.log(`🗑️ Canais removidos por group-title: ${channels.length - filteredByGroupTitle.length}`);
         
         // Filtrar por nome do canal (anos entre parênteses)
-        const filteredByChannelName = filteredByGroupTitle.filter(channel => !shouldExcludeChannelName(channel.name));
+        const filteredByChannelName = filteredByGroupTitle.filter(channel => !shouldExcludeChannelName(channel.name, channel.groupTitle));
         console.log(`🗑️ Canais removidos por nome (anos): ${filteredByGroupTitle.length - filteredByChannelName.length}`);
         
         // Filtrar por URL (/movie/)
-        const filteredByURL = filteredByChannelName.filter(channel => !shouldExcludeURL(channel.url));
+        const filteredByURL = filteredByChannelName.filter(channel => !shouldExcludeURL(channel.url, channel.groupTitle));
         console.log(`🗑️ Canais removidos por URL (/movie/): ${filteredByChannelName.length - filteredByURL.length}`);
         
         // Extrair nome base e resolução
@@ -282,7 +289,7 @@ function processM3UFile(inputFile, maxSizeMB = 20) {
         }
         
         // Gerar arquivo de saída
-        const outputFile = inputFile.replace('.m3u', '_filtered_quality.m3u');
+        const outputFile = 'hd.m3u';
         let output = '#EXTM3U\n';
         
         finalChannels.forEach(channel => {
