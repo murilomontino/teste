@@ -3,10 +3,12 @@ const path = require('path');
 
 /**
  * Processa arquivo M3U para eliminar canais repetidos
- * Mantém apenas os 3 canais de maior resolução para cada programa
+ * Mantém apenas canais HD, Full HD e 4K
+ * Controla tamanho do arquivo final (máximo 20MB)
  */
-function processM3UFile(inputFile) {
+function processM3UFile(inputFile, maxSizeMB = 20) {
     console.log(`📁 Processando arquivo: ${inputFile}`);
+    console.log(`📏 Tamanho máximo do arquivo final: ${maxSizeMB}MB`);
     
     // Verificar se o arquivo existe
     if (!fs.existsSync(inputFile)) {
@@ -62,20 +64,26 @@ function processM3UFile(inputFile) {
             // Extrair resolução
             let resolution = 0;
             let resolutionText = 'Unknown';
+            let isHighQuality = false;
             
-            // Padrões de resolução
+            // Padrões de resolução - APENAS HD, Full HD e 4K
             if (name.match(/4K|UHD/i)) {
                 resolution = 4;
                 resolutionText = '4K/UHD';
+                isHighQuality = true;
             } else if (name.match(/1080p|FHD/i)) {
                 resolution = 3;
                 resolutionText = '1080p/FHD';
+                isHighQuality = true;
             } else if (name.match(/720p|HD/i)) {
                 resolution = 2;
                 resolutionText = '720p/HD';
-            } else if (name.match(/480p|SD/i)) {
-                resolution = 1;
-                resolutionText = '480p/SD';
+                isHighQuality = true;
+            } else {
+                // Canais SD ou sem resolução identificada
+                resolution = 0;
+                resolutionText = 'SD/Unknown';
+                isHighQuality = false;
             }
             
             // Extrair nome base (remover resolução)
@@ -95,56 +103,100 @@ function processM3UFile(inputFile) {
             channel.baseName = baseName;
             channel.resolution = resolution;
             channel.resolutionText = resolutionText;
+            channel.isHighQuality = isHighQuality;
         });
+        
+        // Filtrar apenas canais de alta qualidade (HD, Full HD, 4K)
+        const highQualityChannels = channels.filter(channel => channel.isHighQuality);
+        console.log(`🎯 Canais de alta qualidade (HD/FHD/4K): ${highQualityChannels.length}`);
+        console.log(`🗑️ Canais removidos (SD/Unknown): ${channels.length - highQualityChannels.length}`);
         
         // Agrupar por nome base
         const groups = {};
-        channels.forEach(channel => {
+        highQualityChannels.forEach(channel => {
             if (!groups[channel.baseName]) {
                 groups[channel.baseName] = [];
             }
             groups[channel.baseName].push(channel);
         });
         
-        console.log(`📊 Grupos de canais: ${Object.keys(groups).length}`);
+        console.log(`📊 Grupos de canais de alta qualidade: ${Object.keys(groups).length}`);
         
-        // Processar cada grupo
+        // Processar cada grupo - manter apenas o melhor canal de cada grupo
         const processedChannels = [];
         
         Object.entries(groups).forEach(([baseName, groupChannels]) => {
             // Ordenar por resolução (maior primeiro)
             groupChannels.sort((a, b) => b.resolution - a.resolution);
             
-            // Manter apenas os 3 primeiros
-            const topChannels = groupChannels.slice(0, 3);
+            // Manter apenas o melhor canal (maior resolução)
+            const bestChannel = groupChannels[0];
             
-            console.log(`📺 ${baseName}: ${groupChannels.length} → ${topChannels.length} canais`);
+            console.log(`📺 ${baseName}: ${groupChannels.length} → 1 canal (${bestChannel.resolutionText})`);
             
-            // Mostrar resoluções dos canais mantidos
-            topChannels.forEach((channel, index) => {
-                console.log(`   ${index + 1}. ${channel.resolutionText} - ${channel.name}`);
-            });
-            
-            processedChannels.push(...topChannels);
+            processedChannels.push(bestChannel);
         });
         
+        // Ordenar canais por resolução (4K primeiro, depois Full HD, depois HD)
+        processedChannels.sort((a, b) => b.resolution - a.resolution);
+        
+        // Controle de tamanho do arquivo
+        const maxSizeBytes = maxSizeMB * 1024 * 1024; // Converter MB para bytes
+        let finalChannels = [];
+        let currentSize = 0;
+        const headerSize = '#EXTM3U\n'.length;
+        currentSize += headerSize;
+        
+        console.log(`\n📏 Controlando tamanho do arquivo (máximo: ${maxSizeMB}MB)...`);
+        
+        for (const channel of processedChannels) {
+            const channelSize = (channel.line + '\n' + channel.url + '\n').length;
+            
+            if (currentSize + channelSize <= maxSizeBytes) {
+                finalChannels.push(channel);
+                currentSize += channelSize;
+            } else {
+                console.log(`⚠️ Parando adição de canais - limite de tamanho atingido`);
+                break;
+            }
+        }
+        
         // Gerar arquivo de saída
-        const outputFile = inputFile.replace('.m3u', '_processed.m3u');
+        const outputFile = inputFile.replace('.m3u', '_hd_only.m3u');
         let output = '#EXTM3U\n';
         
-        processedChannels.forEach(channel => {
+        finalChannels.forEach(channel => {
             output += channel.line + '\n';
             output += channel.url + '\n';
         });
         
         fs.writeFileSync(outputFile, output, 'utf8');
         
-        console.log('\n📊 RESUMO:');
+        // Calcular estatísticas finais
+        const finalSizeMB = (currentSize / (1024 * 1024)).toFixed(2);
+        
+        console.log('\n📊 RESUMO FINAL:');
         console.log(`📺 Canais originais: ${channels.length}`);
-        console.log(`✅ Canais processados: ${processedChannels.length}`);
-        console.log(`🗑️ Canais removidos: ${channels.length - processedChannels.length}`);
-        console.log(`📈 Redução: ${((channels.length - processedChannels.length) / channels.length * 100).toFixed(1)}%`);
+        console.log(`🎯 Canais de alta qualidade: ${highQualityChannels.length}`);
+        console.log(`✅ Canais no arquivo final: ${finalChannels.length}`);
+        console.log(`🗑️ Canais removidos: ${channels.length - finalChannels.length}`);
+        console.log(`📈 Redução: ${((channels.length - finalChannels.length) / channels.length * 100).toFixed(1)}%`);
+        console.log(`📏 Tamanho do arquivo final: ${finalSizeMB}MB`);
         console.log(`📁 Arquivo de saída: ${outputFile}`);
+        
+        // Estatísticas por resolução
+        const resolutionStats = {};
+        finalChannels.forEach(channel => {
+            if (!resolutionStats[channel.resolutionText]) {
+                resolutionStats[channel.resolutionText] = 0;
+            }
+            resolutionStats[channel.resolutionText]++;
+        });
+        
+        console.log('\n📺 Distribuição por resolução:');
+        Object.entries(resolutionStats).forEach(([resolution, count]) => {
+            console.log(`   ${resolution}: ${count} canais`);
+        });
         
     } catch (error) {
         console.error(`❌ Erro ao processar arquivo: ${error.message}`);
@@ -153,4 +205,4 @@ function processM3UFile(inputFile) {
 
 // Executar
 const inputFile = 'tv_channels_014618612_plus.m3u';
-processM3UFile(inputFile); 
+processM3UFile(inputFile, 20); // Máximo 20MB 
